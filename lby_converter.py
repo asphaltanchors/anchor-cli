@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, os, struct, csv, statistics, re, glob
+import sys, os, struct, csv, statistics, re, glob, json
 
 def find_data_offset(data):
     """Dynamically find where the actual data starts by looking for reasonable data patterns"""
@@ -78,22 +78,31 @@ def maybe_collapse_to_u16(words):
         return [w & 0xFFFF for w in words], 16
     return words, 32
 
-def write_csv(path, rows, timestamp_info=None, test_id="0000"):
-    # Generate filename in format YYYYMMDD-HHMMSS-ID.csv
+def write_csv(path, rows, timestamp_info=None, test_id="0000", output_format="csv"):
+    # Generate filename in format YYYYMMDD-HHMMSS-ID.ext
     if timestamp_info:
         year, month, day, hour, minute, second = timestamp_info
-        out = f"{year:04d}{month:02d}{day:02d}-{hour:02d}{minute:02d}{second:02d}-{test_id}.csv"
+        ext = "json" if output_format == "json" else "csv"
+        out = f"{year:04d}{month:02d}{day:02d}-{hour:02d}{minute:02d}{second:02d}-{test_id}.{ext}"
     else:
         # Fallback to original naming
-        out = os.path.splitext(path)[0] + ".csv"
+        ext = "json" if output_format == "json" else "csv"
+        out = os.path.splitext(path)[0] + f".{ext}"
     
-    with open(out, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["time_s", "force_kN"])
-        w.writerows(rows)
+    if output_format == "json":
+        data = {
+            "values": [{"time_s": time, "force_kN": force} for time, force in rows]
+        }
+        with open(out, "w") as f:
+            json.dump(data, f, indent=2)
+    else:
+        with open(out, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["time_s", "force_kN"])
+            w.writerows(rows)
     return out
 
-def process_lby_file(path):
+def process_lby_file(path, output_format="csv"):
     b = open(path, "rb").read()
     
     # Find the actual data offset dynamically
@@ -130,9 +139,9 @@ def process_lby_file(path):
     # 3) convert to engineering units (absolute force values)
     force_kN = [s * calibration_factor for s in samples]
 
-    # 4) write CSV with time stamps (0.5 second intervals)
+    # 4) write output file with time stamps (0.5 second intervals)
     rows = [(i * 0.5, force_kN[i]) for i in range(len(samples))]
-    out = write_csv(path, rows, timestamp_info, test_id)
+    out = write_csv(path, rows, timestamp_info, test_id, output_format)
 
     # 5) find max absolute force value
     max_force = max(force_kN) if force_kN else 0
@@ -143,13 +152,17 @@ def process_lby_file(path):
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='Convert LBY binary files to CSV format')
+    parser = argparse.ArgumentParser(description='Convert LBY binary files to CSV or JSON format')
     parser.add_argument('directory', nargs='?', default='.', 
                        help='Directory containing LBY files (default: current directory)')
     parser.add_argument('--force', action='store_true',
-                       help='Overwrite existing CSV files')
+                       help='Overwrite existing output files')
+    parser.add_argument('--json', action='store_true',
+                       help='Output in JSON format instead of CSV')
     
     args = parser.parse_args()
+    
+    output_format = "json" if args.json else "csv"
     
     # Find all LBY files in specified directory
     search_pattern1 = os.path.join(args.directory, "*.LBY")
@@ -167,23 +180,24 @@ def main():
     for lby_file in sorted(lby_files):
         base_name = os.path.basename(lby_file)
         
-        # Check if any CSV file with this test ID already exists (since we generate timestamp-based names)
+        # Check if any output file with this test ID already exists (since we generate timestamp-based names)
         test_id = extract_test_id(base_name)
-        existing_csvs = glob.glob(f"*-{test_id}.csv")
+        file_ext = "json" if output_format == "json" else "csv"
+        existing_files = glob.glob(f"*-{test_id}.{file_ext}")
         
-        if existing_csvs and not args.force:
-            print(f"Skipping {base_name} - CSV file(s) {existing_csvs} already exist (use --force to overwrite)")
+        if existing_files and not args.force:
+            print(f"Skipping {base_name} - {file_ext.upper()} file(s) {existing_files} already exist (use --force to overwrite)")
             skipped_count += 1
             continue
 
-        # Remove existing CSV files if --force is specified
+        # Remove existing output files if --force is specified
         if args.force:
-            for csv_file in existing_csvs:
-                os.remove(csv_file)
-                print(f"Removed existing {csv_file}")
+            for output_file in existing_files:
+                os.remove(output_file)
+                print(f"Removed existing {output_file}")
 
         try:
-            process_lby_file(lby_file)
+            process_lby_file(lby_file, output_format)
             processed_count += 1
         except Exception as e:
             print(f"Error processing {base_name}: {e}")
