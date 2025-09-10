@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 import sys, os, struct, csv, statistics, re, glob, json
+from datetime import datetime, timezone
+import time
+
+SOURCE_TAG = "HCV5S"
 
 def find_data_offset(data):
     """Dynamically find where the actual data starts by looking for reasonable data patterns"""
@@ -60,6 +64,15 @@ def extract_test_id(filename):
     match = re.search(r'HC(\d+)', filename, re.IGNORECASE)
     return match.group(1) if match else "0000"
 
+def extract_seq_tag(filename):
+    # Extract sequence tag including prefix, e.g., "HC0030" from filename
+    base = os.path.splitext(os.path.basename(filename))[0]
+    m = re.search(r'(HC\d+)', base, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    # Fallback to full base name uppercased
+    return base.upper() if base else "HC0000"
+
 def extract_ascii(buf):
     # pull readable substrings (>=4 chars)
     s = []
@@ -78,15 +91,19 @@ def maybe_collapse_to_u16(words):
         return [w & 0xFFFF for w in words], 16
     return words, 32
 
-def write_csv(path, rows, timestamp_info=None, test_id="0000", output_format="csv"):
-    # Generate filename in format YYYYMMDD-HHMMSS-ID.ext
+def write_csv(path, rows, timestamp_info=None, seq_tag="HC0000", src_tag=SOURCE_TAG, output_format="csv"):
+    # Generate filename in format YYYYMMDDThhmmssZ__SRC__SEQ.ext (UTC)
+    ext = "json" if output_format == "json" else "csv"
     if timestamp_info:
         year, month, day, hour, minute, second = timestamp_info
-        ext = "json" if output_format == "json" else "csv"
-        out = f"{year:04d}{month:02d}{day:02d}-{hour:02d}{minute:02d}{second:02d}-{test_id}.{ext}"
+        # Interpret header time as local time, convert to UTC
+        local_naive = datetime(year, month, day, hour, minute, second)
+        # time.mktime treats struct_time as local time and returns POSIX timestamp
+        ts = time.mktime(local_naive.timetuple())
+        utc_dt = datetime.utcfromtimestamp(ts)
+        out = f"{utc_dt:%Y%m%dT%H%M%SZ}__{src_tag}__{seq_tag}.{ext}"
     else:
         # Fallback to original naming
-        ext = "json" if output_format == "json" else "csv"
         out = os.path.splitext(path)[0] + f".{ext}"
     
     if output_format == "json":
@@ -102,7 +119,7 @@ def write_csv(path, rows, timestamp_info=None, test_id="0000", output_format="cs
             w.writerows(rows)
     return out
 
-def process_lby_file(path, output_format="csv"):
+def process_lby_file(path, output_format="csv", src_tag=SOURCE_TAG):
     b = open(path, "rb").read()
     
     # Find the actual data offset dynamically
@@ -115,9 +132,10 @@ def process_lby_file(path, output_format="csv"):
     print(f"Processing {path}...")
     print("Header ASCII strings:", ascii_bits)
     
-    # Extract timestamp and test ID
+    # Extract timestamp and test/sequence identifiers
     timestamp_info = extract_timestamp(header)
     test_id = extract_test_id(os.path.basename(path))
+    seq_tag = extract_seq_tag(os.path.basename(path))
     
     if timestamp_info:
         year, month, day, hour, minute, second = timestamp_info
@@ -126,6 +144,7 @@ def process_lby_file(path, output_format="csv"):
         print("Warning: Could not extract timestamp from header")
     
     print(f"Test ID: {test_id}")
+    print(f"Sequence tag: {seq_tag}")
     
     calibration_factor = extract_calibration(header, test_id)
     print(f"Detected calibration factor: {calibration_factor:.6f} kN/count")
@@ -141,7 +160,7 @@ def process_lby_file(path, output_format="csv"):
 
     # 4) write output file with time stamps (0.5 second intervals)
     rows = [(i * 0.5, force_kN[i]) for i in range(len(samples))]
-    out = write_csv(path, rows, timestamp_info, test_id, output_format)
+    out = write_csv(path, rows, timestamp_info, seq_tag, src_tag, output_format)
 
     # 5) find max absolute force value
     max_force = max(force_kN) if force_kN else 0
@@ -181,9 +200,9 @@ def main():
         base_name = os.path.basename(lby_file)
         
         # Check if any output file with this test ID already exists (since we generate timestamp-based names)
-        test_id = extract_test_id(base_name)
+        seq_tag = extract_seq_tag(base_name)
         file_ext = "json" if output_format == "json" else "csv"
-        existing_files = glob.glob(f"*-{test_id}.{file_ext}")
+        existing_files = glob.glob(f"*__{SOURCE_TAG}__{seq_tag}.{file_ext}")
         
         if existing_files and not args.force:
             print(f"Skipping {base_name} - {file_ext.upper()} file(s) {existing_files} already exist (use --force to overwrite)")
@@ -197,7 +216,7 @@ def main():
                 print(f"Removed existing {output_file}")
 
         try:
-            process_lby_file(lby_file, output_format)
+            process_lby_file(lby_file, output_format, src_tag=SOURCE_TAG)
             processed_count += 1
         except Exception as e:
             print(f"Error processing {base_name}: {e}")
