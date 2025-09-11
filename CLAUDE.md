@@ -78,3 +78,4 @@ The parser handles variable file structures through dynamic offset detection rat
 
 ### Output Format
 CSV files contain absolute force measurements (not baseline-zeroed). The format is deliberately simple: `time_s,force_kN` with 0.5-second intervals matching the original sampling rate.
+- this script is only used by 1 user, don't worry about legacy or migration or other users
