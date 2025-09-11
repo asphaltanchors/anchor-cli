@@ -45,6 +45,8 @@ Examples:
                               help='Show what would happen without processing')
     ingest_parser.add_argument('--force', action='store_true',
                               help='Overwrite existing staged files')
+    ingest_parser.add_argument('--json', action='store_true',
+                              help='Output LBY files as JSON instead of CSV')
     
     return parser
 
@@ -78,12 +80,14 @@ def main():
         # Import and run ingest
         try:
             from ingest import run_ingest
+            output_format = "json" if getattr(args, 'json', False) else "csv"
             return run_ingest(
                 date=date_arg,
                 intake_dir=args.intake_dir,
                 dry_run=getattr(args, 'dry_run', False),
                 force=getattr(args, 'force', False),
-                verbose=getattr(args, 'verbose', False)
+                verbose=getattr(args, 'verbose', False),
+                output_format=output_format
             )
         except ImportError as e:
             print(f"Error: Could not import ingest module: {e}", file=sys.stderr)

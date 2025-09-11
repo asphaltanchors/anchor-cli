@@ -2,7 +2,9 @@
 # ABOUTME: Ingest module for processing intake files into staged UTC format
 # ABOUTME: Combines LBY and media file processing with canonical filename generation
 
+import csv
 import glob
+import json
 import os
 import re
 import struct
@@ -90,10 +92,39 @@ def find_lby_data_offset(data: bytes) -> int:
     return 608
 
 
+def extract_lby_calibration(header_data: bytes, test_id: str) -> float:
+    """Universal calibration: raw values are in Newtons, convert to kilonewtons"""
+    # Analysis of 7+ files confirms this is consistent across all .LBY files
+    return 0.001
+
+
+def load_lby_words_le(data: bytes) -> list[int]:
+    """Load 32-bit little-endian signed integers from binary data"""
+    n = len(data) // 4
+    return list(struct.unpack("<" + "i"*n, data[:n*4]))
+
+
+def write_lby_output(output_path: str, rows: list[tuple], output_format: str = "csv") -> str:
+    """Write LBY processing results to CSV or JSON format"""
+    if output_format == "json":
+        data = {
+            "values": [{"time_s": time, "force_kN": force} for time, force in rows]
+        }
+        with open(output_path, "w") as f:
+            json.dump(data, f, indent=2)
+    else:
+        with open(output_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["time_s", "force_kN"])
+            w.writerows(rows)
+    return output_path
+
+
 def process_lby_file(file_path: str, output_dir: str, dry_run: bool = False, 
-                     force: bool = False, verbose: bool = False) -> tuple[bool, str]:
+                     force: bool = False, verbose: bool = False, 
+                     output_format: str = "csv") -> tuple[bool, str]:
     """
-    Process a single LBY file and create canonical filename in output directory.
+    Process a single LBY file and generate CSV/JSON output in output directory.
     Returns (success, output_path)
     """
     try:
@@ -103,6 +134,7 @@ def process_lby_file(file_path: str, output_dir: str, dry_run: bool = False,
         # Find header and extract timestamp
         data_offset = find_lby_data_offset(data)
         header = data[:data_offset]
+        payload = data[data_offset:]
         
         timestamp_utc = extract_lby_timestamp(header)
         if timestamp_utc is None:
@@ -113,10 +145,15 @@ def process_lby_file(file_path: str, output_dir: str, dry_run: bool = False,
         
         # Extract sequence from filename
         sequence = extract_lby_sequence(file_path)
+        test_id = sequence.replace("HC", "") if sequence.startswith("HC") else "0000"
         
-        # Generate canonical filename
+        # Get calibration factor
+        calibration_factor = extract_lby_calibration(header, test_id)
+        
+        # Generate canonical filename (CSV/JSON, not .lby)
+        ext = ".json" if output_format == "json" else ".csv"
         canonical_name = generate_canonical_filename(
-            timestamp_utc, "HCV5S", sequence, ".lby"
+            timestamp_utc, "HCV5S", sequence, ext
         )
         output_path = os.path.join(output_dir, canonical_name)
         
@@ -124,6 +161,7 @@ def process_lby_file(file_path: str, output_dir: str, dry_run: bool = False,
             print(f"LBY: {os.path.basename(file_path)} -> {canonical_name}")
             print(f"  Timestamp: {timestamp_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}")
             print(f"  Sequence: {sequence}")
+            print(f"  Calibration: {calibration_factor:.6f} kN/count")
         
         # Check if output already exists
         if os.path.exists(output_path) and not force:
@@ -132,11 +170,27 @@ def process_lby_file(file_path: str, output_dir: str, dry_run: bool = False,
             return True, output_path
         
         if not dry_run:
-            # Create symlink to original file
+            # Process the LBY data
             os.makedirs(output_dir, exist_ok=True)
-            if os.path.exists(output_path):
-                os.unlink(output_path)
-            os.symlink(os.path.abspath(file_path), output_path)
+            
+            # Decode payload as 32-bit little-endian signed integers
+            samples = load_lby_words_le(payload)
+            
+            if verbose:
+                print(f"  Processed {len(samples)} samples as 32-bit values")
+            
+            # Convert to engineering units (absolute force values)
+            force_kN = [s * calibration_factor for s in samples]
+            
+            # Create time series data (0.5 second intervals)
+            rows = [(i * 0.5, force_kN[i]) for i in range(len(samples))]
+            
+            # Write output file
+            write_lby_output(output_path, rows, output_format)
+            
+            if verbose:
+                max_force = max(force_kN) if force_kN else 0
+                print(f"  Max force: {max_force:.3f} kN")
             
         return True, output_path
         
@@ -203,7 +257,8 @@ def process_media_file(file_path: str, output_dir: str, dry_run: bool = False,
 
 
 def run_ingest(date: str, intake_dir: str, dry_run: bool = False, 
-               force: bool = False, verbose: bool = False) -> int:
+               force: bool = False, verbose: bool = False, 
+               output_format: str = "csv") -> int:
     """
     Main ingest function. Process all files from intake date directory.
     Returns 0 on success, 1 on error.
@@ -265,7 +320,7 @@ def run_ingest(date: str, intake_dir: str, dry_run: bool = False,
         
         if ext_lower in LBY_EXTENSIONS:
             success, output_path = process_lby_file(
-                file_path, str(output_dir), dry_run, force, verbose
+                file_path, str(output_dir), dry_run, force, verbose, output_format
             )
         elif ext_lower in MEDIA_EXTENSIONS:
             success, output_path = process_media_file(

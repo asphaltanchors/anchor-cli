@@ -1,80 +1,181 @@
-# LBY Force Data Converter
+# Anchor Test Processing Pipeline
 
-A Python utility for converting proprietary .LBY force measurement files into standard CSV format. The .LBY files contain force sensor data from physical testing equipment, and this parser extracts both timestamp metadata and force measurements.
+A unified CLI for processing anchor test data including force measurements (.LBY files) and media files (videos, photos) into a structured pipeline for downstream editing and analysis.
 
-## Features
+## Overview
 
-- **Dynamic header detection**: Automatically finds where header ends and data begins
-- **Timestamp extraction**: Parses embedded timestamp data from file headers
-- **Universal calibration**: Applies consistent 0.001 kN/count calibration factor
-- **Batch processing**: Process entire directories of .LBY files
-- **Smart naming**: Generated CSV files follow `YYYYMMDD-HHMMSS-{test_id}.csv` pattern
+The anchor test processing pipeline organizes, processes, and promotes test data through a systematic workflow:
 
-## Usage
+1. **Ingest**: Process raw intake files into staged UTC format
+2. **Cluster**: Group staged files by time gaps (future)  
+3. **Promote**: Organize clusters into test hierarchies (future)
+4. **Process**: Generate final analysis outputs (future)
 
-### Basic Commands
+## Quick Start
 
-```bash
-# Process all LBY files in current directory
-python3 lby_converter.py
-
-# Process LBY files from a specific directory
-python3 lby_converter.py original/
-
-# Force overwrite existing CSV files
-python3 lby_converter.py original/ --force
-
-# Process single file programmatically
-python3 -c "import lby_converter; lby_converter.process_lby_file('original/HC0020.LBY')"
-```
-
-### Verification
+### Installation
 
 ```bash
-# Check generated CSV files
-ls -la *.csv
+# Clone repository
+git clone <repository-url>
+cd HV-V5S-parser
 
-# View a sample CSV output
-head -20 20250820-075600-0020.csv
+# Make anchor executable
+chmod +x anchor.py
 ```
 
-## File Format
+### Basic Usage
 
-### Input (.LBY files)
-- **Header section** (256-800 bytes): ASCII metadata, timestamps, calibration data
-- **Data section**: 32-bit signed little-endian integers (force in Newtons)
+```bash
+# Process files from a specific date
+python3 anchor.py ingest 2025-09-10
 
-### Output (CSV files)
-- Column 1: `time_s` - Time in seconds (0.5s intervals)
-- Column 2: `force_kN` - Force in kilonewtons (absolute values)
+# Preview what would happen (dry run)
+python3 anchor.py ingest 2025-09-10 --dry-run
+
+# Process with verbose output
+python3 anchor.py --verbose ingest 2025-09-10
+
+# Generate JSON instead of CSV for LBY files
+python3 anchor.py ingest 2025-09-10 --json
+
+# Force overwrite existing files
+python3 anchor.py ingest 2025-09-10 --force
+```
+
+## Commands
+
+### `ingest`
+
+Processes files from intake directory into staged UTC format with canonical filenames.
+
+**Input**: `~/Projects/AnchorTesting/_Intake/YYYY-MM-DD_import/`
+**Output**: `~/Projects/AnchorTesting/_StagedUTC/`
+
+#### File Processing
+
+**LBY Files (Force Data)**:
+- Extracts binary force sensor data and timestamps
+- Applies universal 0.001 kN/count calibration
+- Generates time-series CSV/JSON with 0.5s intervals
+- Output: `YYYYMMDDThhmmssZ__HCV5S__HC0057.csv`
+
+**Media Files (Videos/Images)**:
+- Extracts timestamps from EXIF/QuickTime metadata
+- Detects device type (iPhone/Android) automatically
+- Creates symlinks with canonical names
+- Output: `YYYYMMDDThhmmssZ__android__PXL.mp4`
+
+#### Options
+
+- `--dry-run`: Preview changes without processing
+- `--force`: Overwrite existing staged files
+- `--json`: Output LBY data as JSON instead of CSV
+- `--intake-dir`: Override default intake directory
+
+#### Examples
+
+```bash
+# Basic processing
+python3 anchor.py ingest 2025-09-10
+
+# Custom intake directory
+python3 anchor.py --intake-dir /path/to/intake ingest 2025-09-10
+
+# JSON output with verbose logging
+python3 anchor.py --verbose ingest 2025-09-10 --json
+
+# Dry run to preview
+python3 anchor.py ingest 2025-09-10 --dry-run
+```
+
+## File Format Details
+
+### LBY Files (Force Data)
+
+**Input Format:**
+- Header (256-800 bytes): ASCII metadata, timestamps
+- Data: 32-bit signed little-endian integers (force in Newtons)
+
+**Output Format (CSV):**
+```csv
+time_s,force_kN
+0.0,0.003
+0.5,0.003
+1.0,0.002
+```
+
+**Output Format (JSON):**
+```json
+{
+  "values": [
+    {"time_s": 0.0, "force_kN": 0.003},
+    {"time_s": 0.5, "force_kN": 0.003}
+  ]
+}
+```
+
+### Media Files
+
+**Supported formats:** `.mov`, `.mp4`, `.heic`, `.jpg`, `.jpeg`
+
+**Processing:**
+- Timestamp extraction via ffprobe/exiftool
+- Device detection from metadata
+- Symlink creation (preserves originals)
+
+## Directory Structure
+
+```
+~/Projects/AnchorTesting/
+├── _Intake/
+│   └── 2025-09-10_import/       # Raw intake files
+│       ├── HC0057.LBY           # Force measurement files
+│       ├── HC0058.LBY
+│       └── PXL_*.mp4            # Video files
+├── _StagedUTC/                  # Processed files with UTC names
+│   ├── 20250910T153000Z__HCV5S__HC0057.csv
+│   └── 20250910T152945Z__android__PXL.mp4 -> ../intake/...
+├── _Clusters/                   # Time-based clusters (future)
+├── 00_Input/                    # Per-test organized files (future)  
+└── 01_Processed/                # Final analysis outputs (future)
+```
 
 ## Technical Details
 
-### Processing Pipeline
-1. Dynamic offset detection locates data section start
-2. Header parsing extracts timestamp and metadata
-3. Universal 0.001 calibration factor applied (Newtons → kilonewtons)
-4. Force data extracted as signed 32-bit integers
-5. CSV output generated with 0.5-second time intervals
+### Force Data Processing
+- **Dynamic offset detection**: Automatically finds data section start
+- **Universal calibration**: 0.001 kN/count across all LBY files
+- **Signed integer parsing**: Handles negative force values
+- **Absolute measurements**: No baseline subtraction
+- **Time intervals**: 0.5-second sampling rate
 
-### Key Implementation Notes
-- **Calibration factor**: Fixed 0.001 kN/count across all files
-- **Signed integers**: Properly handles negative force values
-- **Absolute measurements**: No baseline subtraction applied
-- **Variable structure**: Handles different header sizes automatically
+### Media Processing
+- **Metadata extraction**: ffprobe for videos, exiftool fallback
+- **Device detection**: Apple/iPhone vs Android/Google identification
+- **UTC conversion**: Local timestamps converted to UTC
+- **Symlink preservation**: Originals remain untouched
+
+### Canonical Naming
+All processed files use UTC-based canonical names:
+`YYYYMMDDThhmmssZ__SOURCE__SEQUENCE.extension`
+
+Examples:
+- `20250910T153000Z__HCV5S__HC0057.csv`
+- `20250910T152945Z__android__PXL.mp4`
 
 ## Requirements
 
-- Python 3.x
-- Standard library modules: `sys`, `os`, `struct`, `csv`, `statistics`, `re`, `glob`, `argparse`
+- Python 3.9+
+- External tools: `ffprobe`, `exiftool` (for media processing)
+- Standard library modules
 
 ## File Structure
 
 ```
-├── lby_converter.py    # Main parser script
-├── original/          # Source .LBY binary files
-├── CLAUDE.md          # Development documentation
-└── README.md          # This file
+├── anchor.py              # Main CLI entrypoint
+├── ingest.py              # Ingest command implementation  
+├── media_timestamp.py     # Media timestamp extraction utilities
+├── CLAUDE.md              # Development documentation
+└── README.md              # This file
 ```
-
-Generated CSV files appear in the working directory with timestamp-based naming.
