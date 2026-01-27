@@ -1,15 +1,12 @@
-# Anchor Test Processing Pipeline
+# Anchor Test Processing Utilities
 
-A unified CLI for processing anchor test data including force measurements (.LBY files) and media files (videos, photos) into a structured pipeline for downstream editing and analysis.
+Simple, focused tools for parsing pull-tester force data (.LBY files) and (optionally) organizing media files.
 
 ## Overview
 
-The anchor test processing pipeline organizes, processes, and promotes test data through a systematic workflow:
-
-1. **Ingest**: Process raw intake files into staged UTC format
-2. **Cluster**: Group staged files by time gaps (future)  
-3. **Promote**: Organize clusters into test hierarchies (future)
-4. **Process**: Generate final analysis outputs (future)
+- Parse .LBY files into CSV/JSON
+- Optionally organize photos/videos into canonical UTC filenames
+- Defaults to an interactive date picker when dates aren't provided
 
 ## Quick Start
 
@@ -18,7 +15,7 @@ The anchor test processing pipeline organizes, processes, and promotes test data
 ```bash
 # Clone repository
 git clone <repository-url>
-cd HV-V5S-parser
+cd anchor-cli
 
 # Make anchor executable
 chmod +x anchor.py
@@ -27,67 +24,68 @@ chmod +x anchor.py
 ### Basic Usage
 
 ```bash
-# Process files from a specific date
-python3 anchor.py ingest 2025-09-10
+# Parse LBY files (interactive date picker if --dates/--all not provided)
+python3 anchor.py lby --input ~/projects/pull-test-data/HCVNS
 
-# Preview what would happen (dry run)
-python3 anchor.py ingest 2025-09-10 --dry-run
+# Parse a specific date (comma list or range)
+python3 anchor.py lby --input ~/projects/pull-test-data/HCVNS --dates 2026-01-27
+python3 anchor.py lby --input ~/projects/pull-test-data/HCVNS --dates 2025-09-10,2025-09-11
+python3 anchor.py lby --input ~/projects/pull-test-data/HCVNS --dates 2025-09-10..2025-09-19
 
-# Process with verbose output
-python3 anchor.py --verbose ingest 2025-09-10
+# Output JSON instead of CSV
+python3 anchor.py lby --input ~/projects/pull-test-data/HCVNS --dates 2026-01-27 --json
 
-# Generate JSON instead of CSV for LBY files
-python3 anchor.py ingest 2025-09-10 --json
-
-# Force overwrite existing files
-python3 anchor.py ingest 2025-09-10 --force
+# Media processing (optional)
+python3 anchor.py media --input ~/projects/pull-test-data/HCVNS --all
 ```
 
 ## Commands
 
-### `ingest`
+### `lby`
 
-Processes files from intake directory into staged UTC format with canonical filenames.
+Parse pull-tester `.LBY` files into CSV/JSON.
 
-**Input**: `~/Projects/AnchorTesting/_Intake/YYYY-MM-DD_import/`
-**Output**: `~/Projects/AnchorTesting/_StagedUTC/`
+**Input**: A directory containing `.LBY` files.
+**Output**: `./output` by default, containing `HC0001.csv` style outputs.
 
-#### File Processing
+#### Behavior
 
-**LBY Files (Force Data)**:
-- Extracts binary force sensor data and timestamps
-- Applies universal 0.001 kN/count calibration
-- Generates time-series CSV/JSON with 0.5s intervals
-- Output: `YYYYMMDDThhmmssZ__HCV5S__HC0057.csv`
-
-**Media Files (Videos/Images)**:
-- Extracts timestamps from EXIF/QuickTime metadata
-- Detects device type (iPhone/Android) automatically
-- Creates symlinks with canonical names
-- Output: `YYYYMMDDThhmmssZ__android__PXL.mp4`
+- Reads timestamps from the LBY header (bytes 5/6/8/9/10-11)
+- Falls back to file mtime if header is missing or invalid
+- Uses a fixed 0.001 kN/count calibration
+- Writes `time_s,force_kN` with 0.5s intervals
 
 #### Options
 
-- `--dry-run`: Preview changes without processing
-- `--force`: Overwrite existing staged files
-- `--json`: Output LBY data as JSON instead of CSV
-- `--intake-dir`: Override default intake directory
+- `--input`: directory containing `.LBY` files
+- `--output`: output directory (default `./output`)
+- `--dates`: comma list or range (YYYY-MM-DD..YYYY-MM-DD)
+- `--all`: process all dates found
+- `--json`: output JSON instead of CSV
+- `--dry-run`: preview without writing files
+- `--force`: overwrite existing outputs
 
-#### Examples
+### `media`
 
-```bash
-# Basic processing
-python3 anchor.py ingest 2025-09-10
+Process media files into canonical UTC filenames (symlinks).
 
-# Custom intake directory
-python3 anchor.py --intake-dir /path/to/intake ingest 2025-09-10
+**Input**: A directory containing media files.
+**Output**: `./output` by default.
 
-# JSON output with verbose logging
-python3 anchor.py --verbose ingest 2025-09-10 --json
+#### Behavior
 
-# Dry run to preview
-python3 anchor.py ingest 2025-09-10 --dry-run
-```
+- Extracts timestamps via ffprobe (or mtime fallback)
+- Detects device type via exiftool
+- Creates symlinks using canonical UTC filenames
+
+#### Options
+
+- `--input`: directory containing media files
+- `--output`: output directory (default `./output`)
+- `--dates`: comma list or range (YYYY-MM-DD..YYYY-MM-DD)
+- `--all`: process all dates found
+- `--dry-run`: preview without writing files
+- `--force`: overwrite existing outputs
 
 ## File Format Details
 
@@ -124,45 +122,16 @@ time_s,force_kN
 - Device detection from metadata
 - Symlink creation (preserves originals)
 
-## Directory Structure
+## Legacy (previous behavior)
 
-```
-~/Projects/AnchorTesting/
-├── _Intake/
-│   └── 2025-09-10_import/       # Raw intake files
-│       ├── HC0057.LBY           # Force measurement files
-│       ├── HC0058.LBY
-│       └── PXL_*.mp4            # Video files
-├── _StagedUTC/                  # Processed files with UTC names
-│   ├── 20250910T153000Z__HCV5S__HC0057.csv
-│   └── 20250910T152945Z__android__PXL.mp4 -> ../intake/...
-├── _Clusters/                   # Time-based clusters (future)
-├── 00_Input/                    # Per-test organized files (future)  
-└── 01_Processed/                # Final analysis outputs (future)
-```
+The older `ingest` pipeline expected a fixed folder layout and produced canonical UTC filenames:
 
-## Technical Details
+- Input: `~/Projects/AnchorTesting/_Intake/YYYY-MM-DD_import/`
+- Output: `~/Projects/AnchorTesting/_StagedUTC/`
+- LBY output: `YYYYMMDDThhmmssZ__HCV5S__HC0057.csv`
+- Media output: `YYYYMMDDThhmmssZ__android__PXL.mp4`
 
-### Force Data Processing
-- **Dynamic offset detection**: Automatically finds data section start
-- **Universal calibration**: 0.001 kN/count across all LBY files
-- **Signed integer parsing**: Handles negative force values
-- **Absolute measurements**: No baseline subtraction
-- **Time intervals**: 0.5-second sampling rate
-
-### Media Processing
-- **Metadata extraction**: ffprobe for videos, exiftool fallback
-- **Device detection**: Apple/iPhone vs Android/Google identification
-- **UTC conversion**: Local timestamps converted to UTC
-- **Symlink preservation**: Originals remain untouched
-
-### Canonical Naming
-All processed files use UTC-based canonical names:
-`YYYYMMDDThhmmssZ__SOURCE__SEQUENCE.extension`
-
-Examples:
-- `20250910T153000Z__HCV5S__HC0057.csv`
-- `20250910T152945Z__android__PXL.mp4`
+That legacy pipeline has been removed from the codebase, but the behavior is documented here for reference.
 
 ## Requirements
 
@@ -174,7 +143,8 @@ Examples:
 
 ```
 ├── anchor.py              # Main CLI entrypoint
-├── ingest.py              # Ingest command implementation  
+├── lby.py                 # LBY parsing command
+├── media.py               # Media processing command
 ├── media_timestamp.py     # Media timestamp extraction utilities
 ├── CLAUDE.md              # Development documentation
 └── README.md              # This file
