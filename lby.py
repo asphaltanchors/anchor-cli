@@ -4,9 +4,11 @@
 
 import csv
 import json
+import math
 import os
 import re
 import struct
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -205,13 +207,42 @@ def process_lby_file(
 
         samples = load_lby_words_le(payload) if payload else []
         if samples:
-            max_index, max_sample = max(enumerate(samples), key=lambda item: item[1])
-            max_force_kN = max_sample * 0.001
-            max_time_s = max_index * 0.5
-            max_timestamp = timestamp_utc + timedelta(seconds=max_time_s)
-            print(f"{max_timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}\t{max_force_kN:.3f}")
-            if verbose:
-                print(f"  Max force_kN: {max_force_kN:.3f} at t={max_time_s:.1f}s")
+            def percentile(values: list[float], p: float) -> float | None:
+                if not values:
+                    return None
+                values_sorted = sorted(values)
+                k = (len(values_sorted) - 1) * (p / 100.0)
+                f = math.floor(k)
+                c = math.ceil(k)
+                if f == c:
+                    return values_sorted[int(k)]
+                return values_sorted[f] + (values_sorted[c] - values_sorted[f]) * (k - f)
+
+            def style(text: str, code: str, use_color: bool) -> str:
+                return f"\x1b[{code}m{text}\x1b[0m" if use_color else text
+
+            force_kN = [s * 0.001 for s in samples]
+            positive_force = [v for v in force_kN if v > 0]
+            percentile_source = positive_force if positive_force else force_kN
+            p98_force_kN = percentile(percentile_source, 98.0)
+            max_index, max_force_kN = max(enumerate(force_kN), key=lambda item: item[1])
+
+            if p98_force_kN is not None:
+                p98_index = next((i for i, v in enumerate(force_kN) if v >= p98_force_kN), len(force_kN) - 1)
+                p98_time_s = p98_index * 0.5
+                p98_timestamp = timestamp_utc + timedelta(seconds=p98_time_s)
+                max_time_s = max_index * 0.5
+                max_timestamp = timestamp_utc + timedelta(seconds=max_time_s)
+                use_color = sys.stdout.isatty()
+                label = style("▲ P98", "36", use_color)
+                ts_text = style(p98_timestamp.strftime('%Y-%m-%d %H:%M:%S UTC'), "2", use_color)
+                value_text = style(f"{p98_force_kN:.2f} kN", "32", use_color)
+                max_label = style("MAX", "33", use_color)
+                max_value_text = style(f"{max_force_kN:.2f} kN", "33", use_color)
+                print(f"{label} {ts_text}  {value_text}  {max_label} {max_value_text}")
+                if verbose:
+                    print(f"  P98 force_kN: {p98_force_kN:.3f} at t={p98_time_s:.1f}s")
+                    print(f"  Max force_kN: {max_force_kN:.3f} at t={max_time_s:.1f}s")
         elif verbose:
             print("  Warning: No samples found in payload")
 
