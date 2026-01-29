@@ -203,6 +203,18 @@ def process_lby_file(
             print(f"  Timestamp: {timestamp_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}")
             print(f"  Output: {output_format.upper()}")
 
+        samples = load_lby_words_le(payload) if payload else []
+        if samples:
+            max_index, max_sample = max(enumerate(samples), key=lambda item: item[1])
+            max_force_kN = max_sample * 0.001
+            max_time_s = max_index * 0.5
+            max_timestamp = timestamp_utc + timedelta(seconds=max_time_s)
+            print(f"{max_timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}\t{max_force_kN:.3f}")
+            if verbose:
+                print(f"  Max force_kN: {max_force_kN:.3f} at t={max_time_s:.1f}s")
+        elif verbose:
+            print("  Warning: No samples found in payload")
+
         if output_path.exists() and not force:
             if verbose:
                 print(f"  Skipping: {output_path.name} already exists (use --force to overwrite)")
@@ -210,7 +222,6 @@ def process_lby_file(
 
         if not dry_run:
             output_dir.mkdir(parents=True, exist_ok=True)
-            samples = load_lby_words_le(payload)
             force_kN = [s * 0.001 for s in samples]
             rows = [(i * 0.5, force_kN[i]) for i in range(len(samples))]
             write_lby_output(output_path, rows, output_format)
